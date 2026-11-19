@@ -1,0 +1,500 @@
+import os
+import json
+from datetime import datetime
+from flask import Flask, render_template_string, request, redirect, url_for, send_from_directory
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
+UPLOAD_FOLDER = 'uploads'
+DATA_FILE = 'database.json'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+ALLOWED_EXTENSIONS = {'mp4', 'webm', 'ogg', 'mov'}
+
+BANNED_KEYWORDS = ['cs', 'counter', 'valorant', 'pubg', 'silah', 'kan', 'savaş', 'gta']
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {
+            "profile": {"name": "Kurucu Kanal", "avatar": "🎬"},
+            "plan": "PRO (0 TL / İlk 2 Ay)",
+            "videos": [],
+            "groups": [{"name": "Genel Üçlü Ayı Kapanı Sohbeti", "messages": [{"author": "Sistem", "text": "Topluluğa hoş geldiniz!"}]}]
+        }
+    with open(DATA_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video hub v5.0</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0a0a0a; color: #fff; margin: 0; padding: 0; overflow-x: hidden; }
+
+        /* Giriş Animasyonu - Sadece V ve Beyaz Yazı */
+        #splash-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #0a0a0a; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 9999;
+            animation: fadeOutSplash 0.6s ease-in-out 2.0s forwards;
+        }
+        .v-logo-box {
+            width: 80px; height: 80px; background: linear-gradient(135deg, #ff4757, #ff6b81);
+            border-radius: 20px; display: flex; justify-content: center; align-items: center;
+            box-shadow: 0 10px 30px rgba(255, 71, 87, 0.4);
+            animation: vPop 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+        .v-letter { font-size: 50px; font-weight: 900; color: #fff; line-height: 1; }
+        .splash-brand-text {
+            font-size: 26px; font-weight: 400; color: #fff; margin-top: 14px; letter-spacing: 0.5px;
+        }
+        .loader-bar { width: 120px; height: 3px; background: #222; border-radius: 3px; margin-top: 18px; overflow: hidden; }
+        .loader-fill { width: 0%; height: 100%; background: #ff4757; animation: loadBar 1.6s ease-in-out forwards; }
+
+        @keyframes vPop { 0% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        @keyframes loadBar { 0% { width: 0%; } 100% { width: 100%; } }
+        @keyframes fadeOutSplash { to { opacity: 0; visibility: hidden; pointer-events: none; } }
+
+        /* Üst Bar ve Sağ Köşe Logo */
+        .container { padding: 14px; max-width: 720px; margin: 0 auto; }
+        header {
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #1f1f1f; padding-bottom: 12px; margin-bottom: 14px;
+        }
+        .brand-main { display: flex; align-items: center; gap: 8px; text-decoration: none; color: #fff; }
+        .v-mini-logo {
+            width: 32px; height: 32px; background: linear-gradient(135deg, #ff4757, #ff6b81);
+            border-radius: 8px; display: flex; justify-content: center; align-items: center;
+            font-size: 20px; font-weight: 900; color: #fff;
+        }
+        .brand-title { font-size: 19px; font-weight: 400; color: #fff; margin: 0; }
+
+        .header-actions { display: flex; gap: 6px; align-items: center; }
+        .pill-btn {
+            background: #161616; color: #fff; border: 1px solid #2e2e2e;
+            padding: 6px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer;
+        }
+        .pill-btn.plan { border-color: #ff4757; color: #ff4757; }
+
+        .alert-box {
+            background: #2c1518; border: 1px solid #ff4757; color: #ff6b81;
+            padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; font-weight: bold;
+        }
+
+        .search-form { display: flex; gap: 8px; margin-bottom: 16px; }
+        .search-box {
+            flex: 1; padding: 11px 16px; border-radius: 24px; border: 1px solid #262626;
+            background: #141414; color: #fff; font-size: 14px;
+        }
+        .search-box:focus { outline: none; border-color: #ff4757; }
+        .search-btn {
+            background: #ff4757; color: #fff; border: none; padding: 0 18px;
+            border-radius: 24px; font-weight: bold; cursor: pointer; font-size: 13px;
+        }
+
+        .upload-card {
+            background: #141414; padding: 15px; border-radius: 14px;
+            margin-bottom: 20px; border: 1px solid #222;
+        }
+        .input-field {
+            width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #2a2a2a;
+            background: #0d0d0d; color: #fff; margin-bottom: 10px; font-size: 14px;
+        }
+        
+        /* Çocuklar için Uygunluk Seçim Alanı Stili */
+        .kids-options-container {
+            background: #101010;
+            border: 1px solid #222;
+            padding: 10px 12px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+        .kids-title { font-size: 13px; color: #bbb; margin-bottom: 6px; font-weight: bold; }
+        .radio-group { display: flex; gap: 20px; }
+        .radio-label { font-size: 13px; color: #ccc; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+        
+        .btn-primary {
+            background: #ff4757; color: white; border: none; padding: 11px;
+            border-radius: 8px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 8px; font-size: 14px;
+        }
+
+        .video-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+        .video-item { background: #141414; padding: 14px; border-radius: 14px; border: 1px solid #222; }
+        video { width: 100%; border-radius: 10px; background: #000; max-height: 360px; }
+        
+        .video-meta { margin-top: 10px; }
+        .video-title { margin: 0 0 4px 0; font-size: 17px; font-weight: 700; color: #fff; }
+        .video-desc { margin: 0 0 8px 0; font-size: 13px; color: #aaa; line-height: 1.4; }
+        .badge-kids { display: inline-block; background: #1e272e; color: #0be881; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-bottom: 8px; }
+        
+        .channel-bar {
+            display: flex; justify-content: space-between; align-items: center;
+            padding-top: 10px; border-top: 1px solid #222; flex-wrap: wrap; gap: 8px;
+        }
+        .channel-info { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #ddd; }
+        .avatar-circle { width: 28px; height: 28px; background: #262626; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 15px; }
+        
+        .btn-report { background: #2b2111; color: #ffa502; border: 1px solid #ffa502; padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: bold; cursor: pointer; }
+        .btn-delete { background: #2c1518; color: #ff4757; border: 1px solid #ff4757; padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: bold; cursor: pointer; }
+
+        .comments-section { margin-top: 12px; background: #0e0e0e; padding: 10px; border-radius: 10px; border: 1px solid #1e1e1e; }
+        .comment-title { font-size: 12px; color: #888; margin: 0 0 8px 0; font-weight: bold; }
+        .comment-list { max-height: 120px; overflow-y: auto; margin-bottom: 8px; }
+        .comment-item { font-size: 13px; padding: 4px 0; border-bottom: 1px solid #191919; }
+        .comment-author { font-weight: bold; color: #ff6b81; margin-right: 6px; }
+        .comment-form { display: flex; gap: 6px; }
+        .comment-input { flex: 1; padding: 7px 10px; border-radius: 6px; border: 1px solid #2a2a2a; background: #161616; color: #fff; font-size: 12px; }
+        .comment-submit { background: #2f3542; color: #fff; border: none; padding: 0 12px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer; }
+
+        /* Modallar */
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.88); z-index: 1000; justify-content: center; align-items: center; padding: 16px; }
+        .modal-content { background: #141414; border: 1px solid #2e2e2e; border-radius: 16px; padding: 20px; width: 100%; max-width: 440px; max-height: 85vh; overflow-y: auto; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+        .modal-title { font-size: 18px; font-weight: 800; margin: 0; }
+        .close-btn { background: none; border: none; color: #888; font-size: 22px; cursor: pointer; }
+
+        .chat-box { background: #0d0d0d; border: 1px solid #222; border-radius: 8px; height: 220px; overflow-y: auto; padding: 10px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+        .chat-msg { font-size: 13px; background: #1a1a1a; padding: 8px; border-radius: 6px; }
+        .chat-author { font-weight: bold; color: #3498db; font-size: 11px; display: block; margin-bottom: 2px; }
+    </style>
+</head>
+<body>
+
+    <!-- Giriş Animasyonu -->
+    <div id="splash-screen">
+        <div class="v-logo-box"><span class="v-letter">V</span></div>
+        <div class="splash-brand-text">Video hub</div>
+        <div class="loader-bar"><div class="loader-fill"></div></div>
+    </div>
+
+    <div class="container">
+        <header>
+            <a href="/" class="brand-main">
+                <div class="v-mini-logo">V</div>
+                <h1 class="brand-title">Video hub</h1>
+            </a>
+            <div class="header-actions">
+                <button class="pill-btn" onclick="openModal('communityModal')">👥 Topluluk</button>
+                <button class="pill-btn" onclick="openModal('profileModal')">{{ data.profile.avatar }} {{ data.profile.name }}</button>
+                <button class="pill-btn plan" onclick="openModal('subModal')">⭐ {{ data.plan.split(' ')[0] }}</button>
+            </div>
+        </header>
+
+        {% if error %}
+        <div class="alert-box">⚠️ {{ error }}</div>
+        {% endif %}
+
+        <form method="GET" action="/" class="search-form">
+            <input type="text" name="q" class="search-box" placeholder="Video veya kanal ara..." value="{{ query }}">
+            <button type="submit" class="search-btn">Ara</button>
+        </form>
+
+        <!-- Video Yükleme Formu (Çocuklar için uygun mu / değil mi seçimli) -->
+        <div class="upload-card">
+            <form method="POST" action="/upload" enctype="multipart/form-data">
+                <input type="text" name="title" class="input-field" placeholder="Video Başlığı (Boş bırakırsan tarih yazılır)">
+                <textarea name="description" class="input-field" rows="2" placeholder="Video açıklaması (isteğe bağlı)..."></textarea>
+                
+                <div class="kids-options-container">
+                    <div class="kids-title">Çocuklar için uygun mu?</div>
+                    <div class="radio-group">
+                        <label class="radio-label">
+                            <input type="radio" name="kids_status" value="yes" checked> Uygun
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="kids_status" value="no"> Uygun Değil
+                        </label>
+                    </div>
+                </div>
+
+                <input type="file" name="video" accept="video/*" capture="camcorder" required style="color:#aaa; width:100%; font-size:13px; margin-top:6px;">
+                <button type="submit" class="btn-primary">Videoyu Yayınla</button>
+            </form>
+        </div>
+
+        <!-- Video Akışı -->
+        <div class="video-grid">
+            {% for video in videos %}
+            <div class="video-item">
+                <video controls preload="metadata">
+                    <source src="{{ url_for('uploaded_file', filename=video.filename) }}" type="video/mp4">
+                </video>
+                
+                <div class="video-meta">
+                    <div class="badge-kids">{{ video.kids_badge }}</div>
+                    <h3 class="video-title">{{ video.title }}</h3>
+                    {% if video.description %}
+                    <p class="video-desc">{{ video.description }}</p>
+                    {% endif %}
+                </div>
+
+                <div class="channel-bar">
+                    <div class="channel-info">
+                        <div class="avatar-circle">{{ video.author_avatar }}</div>
+                        <span>{{ video.author_name }}</span>
+                    </div>
+                    <div style="display:flex; gap:6px;">
+                        <form method="POST" action="{{ url_for('block_video', filename=video.filename) }}" onsubmit="return confirm('Uygunsuz olarak engellensin mi?');">
+                            <button type="submit" class="btn-report">🚫 Engelle</button>
+                        </form>
+                        <form method="POST" action="{{ url_for('delete_file', filename=video.filename) }}" onsubmit="return confirm('Silmek istiyor musun?');">
+                            <button type="submit" class="btn-delete">Sil</button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="comments-section">
+                    <p class="comment-title">Yorumlar ({{ video.comments|length }})</p>
+                    <div class="comment-list">
+                        {% for c in video.comments %}
+                        <div class="comment-item">
+                            <span class="comment-author">{{ c.avatar }} {{ c.author }}:</span>
+                            <span>{{ c.text }}</span>
+                        </div>
+                        {% else %}
+                        <div style="font-size:12px; color:#555;">Henüz yorum yok.</div>
+                        {% endfor %}
+                    </div>
+                    <form method="POST" action="{{ url_for('add_comment', filename=video.filename) }}" class="comment-form">
+                        <input type="text" name="comment_text" class="comment-input" placeholder="Yorum yaz..." required>
+                        <button type="submit" class="comment-submit">Gönder</button>
+                    </form>
+                </div>
+            </div>
+            {% else %}
+            <p style="text-align:center; color:#666; font-size:14px;">Video bulunamadı.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Topluluk & Arkadaş Grupları Modalı -->
+    <div id="communityModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Topluluk & Arkadaş Grupları</h2>
+                <button class="close-btn" onclick="closeModal('communityModal')">✕</button>
+            </div>
+            
+            <h3 style="font-size:14px; color:#ff4757; margin-top:0;">💬 Grup Sohbeti</h3>
+            <div class="chat-box">
+                {% for msg in data.groups[0].messages %}
+                <div class="chat-msg">
+                    <span class="chat-author">{{ msg.author }}</span>
+                    <span>{{ msg.text }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            
+            <form method="POST" action="/send_message" style="display:flex; gap:6px; margin-bottom:15px;">
+                <input type="text" name="msg_text" class="input-field" placeholder="Grup sohbetine mesaj yaz..." style="margin:0;" required>
+                <button type="submit" class="search-btn" style="padding:0 12px;">Gönder</button>
+            </form>
+
+            <form method="POST" action="/create_group">
+                <input type="text" name="group_name" class="input-field" placeholder="Yeni Arkadaş Grubu Kur (Örn: Üçlü Ayı Kapanı)">
+                <button type="submit" class="btn-primary" style="margin:0; padding:8px;">Yeni Grup Oluştur</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Profil Modalı -->
+    <div id="profileModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Profilini Düzenle</h2>
+                <button class="close-btn" onclick="closeModal('profileModal')">✕</button>
+            </div>
+            <form method="POST" action="/update_profile">
+                <label style="font-size:13px; color:#aaa; display:block; margin-bottom:6px;">Kanal İsmi:</label>
+                <input type="text" name="profile_name" class="input-field" value="{{ data.profile.name }}" required>
+                
+                <label style="font-size:13px; color:#aaa; display:block; margin-bottom:6px;">Simge Seç:</label>
+                <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
+                    {% for icon in ['🎬', '🚀', '🎮', '🦁', '⚡', '💻', '🔥', '👑'] %}
+                    <label style="cursor:pointer; font-size:22px; padding:6px; background:#222; border-radius:8px;">
+                        <input type="radio" name="profile_avatar" value="{{ icon }}" {% if data.profile.avatar == icon %}checked{% endif %}> {{ icon }}
+                    </label>
+                    {% endfor %}
+                </div>
+                <button type="submit" class="btn-primary">Kaydet</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Abonelik Modalı -->
+    <div id="subModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Abonelikler</h2>
+                <button class="close-btn" onclick="closeModal('subModal')">✕</button>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid #222;">
+                <span>PRO (İlk 2 Ay)</span><b>0 TL</b>
+                <form method="POST" action="/set_plan"><input type="hidden" name="plan" value="PRO (0 TL)"><button type="submit" class="pill-btn plan">Seç</button></form>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid #222;">
+                <span>PREMIUM (4 Ay)</span><b>200 TL</b>
+                <form method="POST" action="/set_plan"><input type="hidden" name="plan" value="PREMIUM (200 TL)"><button type="submit" class="pill-btn">Seç</button></form>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 0;">
+                <span>ULTIMATE (12 Ay)</span><b>300 TL</b>
+                <form method="POST" action="/set_plan"><input type="hidden" name="plan" value="ULTIMATE (300 TL)"><button type="submit" class="pill-btn" style="background:#f1c40f; color:#000;">Seç</button></form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+        function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+        window.onclick = function(e) { if (e.target.classList.contains('modal')) e.target.style.display = 'none'; }
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    query = request.args.get('q', '').lower()
+    error = request.args.get('error', '')
+    if not os.path.exists(app.config['UPLOAD_FOLDER']):
+        os.makedirs(app.config['UPLOAD_FOLDER'])
+    
+    data = load_data()
+    filtered_videos = [
+        v for v in data["videos"]
+        if not v.get("blocked", False) and (
+            query in v["title"].lower() or
+            query in v.get("description", "").lower() or
+            query in v.get("author_name", "").lower()
+        )
+    ]
+    filtered_videos.reverse()
+    return render_template_string(HTML_TEMPLATE, videos=filtered_videos, query=query, data=data, error=error)
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    title = request.form.get('title', '').strip()
+    description = request.form.get('description', '').strip()
+    kids_status = request.form.get('kids_status')
+    
+    # Yasaklı kelime filtresi
+    check_text = (title + " " + description).lower()
+    for word in BANNED_KEYWORDS:
+        if word in check_text:
+            return redirect(url_for('index', error=f"Yasaklı içerik ('{word}') tespit edildiği için video engellendi!"))
+
+    if 'video' not in request.files:
+        return redirect(url_for('index'))
+    file = request.files['video']
+    if file.filename != '' and allowed_file(file.filename):
+        filename = secure_filename(file.filename).replace(" ", "_")
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        
+        # Eğer başlık yazılmadıysa o günün tarihini ver
+        if not title:
+            title = datetime.now().strftime("%d.%m.%Y_Video")
+
+        if kids_status == 'yes':
+            kids_badge = "👶 Çocuklar İçin Uygun"
+        else:
+            kids_badge = "🔞 Uygun Değil / Genel"
+
+        data = load_data()
+        data["videos"].append({
+            "filename": filename,
+            "title": title,
+            "description": description,
+            "author_name": data["profile"]["name"],
+            "author_avatar": data["profile"]["avatar"],
+            "kids_badge": kids_badge,
+            "blocked": False,
+            "comments": []
+        })
+        save_data(data)
+    return redirect(url_for('index'))
+
+@app.route('/send_message', methods=['POST'])
+def send_message():
+    text = request.form.get('msg_text', '').strip()
+    if text:
+        data = load_data()
+        data["groups"][0]["messages"].append({
+            "author": f"{data['profile']['avatar']} {data['profile']['name']}",
+            "text": text
+        })
+        save_data(data)
+    return redirect(url_for('index'))
+
+@app.route('/create_group', methods=['POST'])
+def create_group():
+    gname = request.form.get('group_name', '').strip()
+    if gname:
+        data = load_data()
+        data["groups"].append({"name": gname, "messages": [{"author": "Sistem", "text": f"'{gname}' grubu kuruldu!"}]})
+        save_data(data)
+    return redirect(url_for('index'))
+
+@app.route('/block/<filename>', methods=['POST'])
+def block_video(filename):
+    data = load_data()
+    for v in data["videos"]:
+        if v["filename"] == filename: v["blocked"] = True
+    save_data(data)
+    return redirect(url_for('index', error="Video engellendi."))
+
+@app.route('/delete/<filename>', methods=['POST'])
+def delete_file(filename):
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(filename))
+    if os.path.exists(file_path): os.remove(file_path)
+    data = load_data()
+    data["videos"] = [v for v in data["videos"] if v["filename"] != filename]
+    save_data(data)
+    return redirect(url_for('index'))
+
+@app.route('/comment/<filename>', methods=['POST'])
+def add_comment(filename):
+    text = request.form.get('comment_text', '').strip()
+    if text:
+        data = load_data()
+        for v in data["videos"]:
+            if v["filename"] == filename:
+                v["comments"].append({"author": data["profile"]["name"], "avatar": data["profile"]["avatar"], "text": text})
+        save_data(data)
+    return redirect(url_for('index'))
+
+@app.route('/update_profile', methods=['POST'])
+def update_profile():
+    name = request.form.get('profile_name', '').strip()
+    avatar = request.form.get('profile_avatar', '🎬')
+    if name:
+        data = load_data()
+        data["profile"]["name"] = name
+        data["profile"]["avatar"] = avatar
+        save_data(data)
+    return redirect(url_for('index'))
+
+@app.route('/set_plan', methods=['POST'])
+def set_plan():
+    selected = request.form.get('plan')
+    if selected:
+        data = load_data()
+        data["plan"] = selected
+        save_data(data)
+    return redirect(url_for('index'))
+
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
